@@ -435,6 +435,9 @@ func (s *Controller) syncLoadBalancerIfNeeded(ctx context.Context, service *v1.S
 		}
 	}
 
+	// update status to local cached load balancer
+	service.Status.LoadBalancer = *newStatus
+
 	return op, nil
 }
 
