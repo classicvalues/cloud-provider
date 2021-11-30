@@ -20,6 +20,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"reflect"
 	"sort"
 	"strings"
@@ -702,7 +703,7 @@ func compareUpdateCalls(t *testing.T, left, right []fakecloud.UpdateBalancerCall
 }
 
 func TestProcessServiceCreateOrUpdate(t *testing.T) {
-	controller, _, client := newController()
+	controller, cloud, client := newController()
 
 	//A pair of old and new loadbalancer IP address
 	oldLBIP := "192.168.1.1"
@@ -771,6 +772,62 @@ func TestProcessServiceCreateOrUpdate(t *testing.T) {
 				}
 				if cachedServiceGot.state.Spec.LoadBalancerIP != newLBIP {
 					return fmt.Errorf("update LoadBalancerIP error, expected: %s, got: %s", newLBIP, cachedServiceGot.state.Spec.LoadBalancerIP)
+				}
+				return nil
+			},
+		},
+		{
+			testName: "If creating Loadbalancer status should be updated in cache",
+			key:      "default/create-test-name",
+			svc:      newService("create-test-name", types.UID("create-test-uid"), v1.ServiceTypeLoadBalancer),
+			updateFn: func(svc *v1.Service) *v1.Service {
+				svc.Spec.LoadBalancerIP = oldLBIP
+				svc.Spec.Ports = []v1.ServicePort{
+					{
+						Name:       "http",
+						Port:       80,
+						TargetPort: intstr.FromInt(80),
+						Protocol:   v1.ProtocolTCP,
+					},
+					{
+						Name:       "https",
+						Port:       443,
+						TargetPort: intstr.FromInt(443),
+						Protocol:   v1.ProtocolTCP,
+					},
+				}
+				cloud.ExternalIP = net.ParseIP(newLBIP)
+				return svc
+			},
+			expectedFn: func(svc *v1.Service, err error) error {
+				if err != nil {
+					return err
+				}
+				controller.needFullSync = true
+				controller.nodeSyncInternal(context.TODO(), 2)
+				if len(controller.cache.allServices()) != len(cloud.UpdateCalls) {
+					return fmt.Errorf("expected number of update calls does not match, expected: %d, got: %d", len(controller.cache.allServices()), len(cloud.UpdateCalls))
+				}
+				var updateCallService *v1.Service
+				for _, updateCall := range cloud.UpdateCalls {
+					if svc.GetObjectMeta().GetNamespace() != updateCall.Service.GetObjectMeta().GetNamespace() {
+						continue
+					}
+					if svc.GetObjectMeta().GetName() != updateCall.Service.GetObjectMeta().GetName() {
+						continue
+					}
+					updateCallService = updateCall.Service
+					break
+				}
+				if updateCallService == nil {
+					return fmt.Errorf("expected updateCallService not to be nil")
+				}
+
+				if len(updateCallService.Status.LoadBalancer.Ingress) != 1 {
+					return fmt.Errorf("len(Status.LoadBalancer.Ingress) error, expected: 1, got: %d", len(updateCallService.Status.LoadBalancer.Ingress))
+				}
+				if updateCallService.Status.LoadBalancer.Ingress[0].IP != newLBIP {
+					return fmt.Errorf("Status.LoadBalancer.Ingress[0].IP error, expected: %s, got: %s", oldLBIP, updateCallService.Status.LoadBalancer.Ingress[0].IP)
 				}
 				return nil
 			},
