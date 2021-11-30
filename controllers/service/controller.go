@@ -432,6 +432,9 @@ func (s *Controller) syncLoadBalancerIfNeeded(service *v1.Service, key string) (
 		}
 	}
 
+	// update status to local cached load balancer
+	service.Status.LoadBalancer = *newStatus
+
 	return op, nil
 }
 
